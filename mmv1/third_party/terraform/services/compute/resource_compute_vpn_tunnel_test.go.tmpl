@@ -80,6 +80,27 @@ func TestAccComputeVpnTunnel_defaultTrafficSelectors(t *testing.T) {
 	})
 }
 
+func TestAccComputeVpnTunnel_cipherSelection(t *testing.T){
+  t.Parallel()
+
+  acctest.VcrTest(t, resource.TestCase{
+    PreCheck:                 func() { acctest.AccTestPreCheck(t) },
+		ProtoV5ProviderFactories: acctest.ProtoV5ProviderBetaFactories(t),
+		CheckDestroy:             testAccCheckComputeVpnTunnelDestroyProducer(t),
+		Steps: []resource.TestStep{
+      {
+        Config: testAccComputeVpnTunnelCipherSelection(acctest.RandString(t, 10)),
+      },
+      {
+        ResourceName:            "google_compute_vpn_tunnel.foobar",
+        ImportState:             true,
+        ImportStateVerify:       true,
+        ImportStateVerifyIgnore: []string{"shared_secret", "detailed_status"},
+      },
+    },
+  })
+}
+
 func testAccComputeVpnTunnel_regionFromGateway(suffix, region string) string {
 	return fmt.Sprintf(`
 resource "google_compute_network" "foobar" {
@@ -253,4 +274,70 @@ resource "google_compute_vpn_tunnel" "foobar" {
   peer_ip            = "8.8.8.8"
 }
 `, suffix)
+}
+
+func testAccComputeVpnTunnelCipherSelection(suffix string) stringv{
+  return fmt.Sprintf(`
+  resource "google_compute_network" "foobar" {
+    name                    = "tf-test-network-%[1]s"
+    auto_create_subnetworks = false
+  }
+
+  resource "google_compute_subnetwork" "foobar" {
+    name          = "tf-test-subnetwork-%[1]s"
+    network       = google_compute_network.foobar.self_link
+    ip_cidr_range = "10.0.0.0/16"
+    region        = "us-central1"
+  }
+
+  resource "google_compute_ha_vpn_gateway" "foobar" {
+    name    = "tf-test-gateway-%[1]s"
+    network = google_compute_network.foobar.self_link
+    region  = google_compute_subnetwork.foobar.region
+  }
+
+  resource "google_compute_external_vpn_gateway" "external_gateway" {
+    name            = "tf-test-external-gateway-%[1]s"
+    redundancy_type = "SINGLE_IP_INTERNALLY_REDUNDANT"
+    description     = "An externally managed VPN gateway"
+    interface {
+      id         = 0
+      ip_address = "8.8.8.8"
+    }
+  }
+
+  resource "google_compute_router" "foobar" {
+    name    = "tf-test-router-%[1]s"
+    region  = google_compute_subnetwork.foobar.region
+    network = google_compute_network.foobar.self_link
+    bgp {
+      asn = 64514
+    }
+  }
+
+  resource "google_compute_vpn_tunnel" "foobar" {
+    name               = "tf-test-tunnel-%[1]s"
+    region             = google_compute_subnetwork.foobar.region
+    vpn_gateway = google_compute_ha_vpn_gateway.foobar.id
+    peer_external_gateway           = google_compute_external_vpn_gateway.external_gateway.id
+    peer_external_gateway_interface = 0  
+    shared_secret      = "unguessable"
+    router             = google_compute_router.foobar.self_link
+    vpn_gateway_interface           = 0
+    ike_version = 2
+    cipher_suite {
+      phase1 {
+        encryption=["AES-GCM-16-128", "AES-CBC-128"]
+        integrity=["HMAC-SHA1-96", "HMAC-MD5-96"]
+        prf=["PRF-HMAC-SHA1", "PRF-HMAC-MD5"]
+        dh=["Group-14", "Group-5"]
+      }
+      phase2 {
+        encryption=["AES-GCM-16-128", "AES-CBC-128"]
+        integrity=["HMAC-SHA1-96", "HMAC-SHA2-256-128"]
+        pfs=["Group-14", "Group-5"]
+      }
+    }
+  }
+  `,suffix)
 }
